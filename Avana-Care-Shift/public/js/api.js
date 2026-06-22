@@ -1,4 +1,4 @@
-const API_BASE = '/api';
+const API_BASE = window.location.port === '3000' ? '/api' : 'http://localhost:3000/api';
 
 const api = {
   getToken() {
@@ -41,7 +41,7 @@ const api = {
       return data;
     } catch (err) {
       if (err.message.includes('Failed to fetch')) {
-        throw new Error('Network error. Please check your connection.');
+        throw new Error('Cannot reach the server. Make sure you have run "npm start" in the Avana-Care-Shift folder to start the backend on port 3000.');
       }
       throw err;
     }
