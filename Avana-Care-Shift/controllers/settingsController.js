@@ -1,85 +1,68 @@
-const { getDb } = require('../models/db');
+const { query, queryOne, run } = require('../models/db');
 
-function getSettings(req, res) {
-  const db = getDb();
-  const rows = db.prepare('SELECT key, value FROM settings').all();
-  const settings = {};
-  for (const row of rows) {
-    settings[row.key] = row.value;
+async function getSettings(req, res) {
+  try {
+    const rows = await query('SELECT `key`, value FROM settings');
+    const settings = {};
+    for (const row of rows) {
+      settings[row.key] = row.value;
+    }
+    res.json(settings);
+  } catch (err) {
+    console.error('getSettings error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
   }
-  res.json(settings);
 }
 
-function updateSettings(req, res) {
-  const settings = req.body;
-  if (!settings || typeof settings !== 'object') {
-    return res.status(400).json({ error: 'Settings object is required.' });
-  }
-
-  const db = getDb();
-  const upsert = db.prepare(`
-    INSERT INTO settings (key, value) VALUES (?, ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `);
-
-  const transaction = db.transaction(() => {
-    for (const [key, value] of Object.entries(settings)) {
-      upsert.run(key, String(value));
+async function updateSettings(req, res) {
+  try {
+    const settings = req.body;
+    if (!settings || typeof settings !== 'object') {
+      return res.status(400).json({ error: 'Settings object is required.' });
     }
-  });
-  transaction();
 
-  const updated = db.prepare('SELECT key, value FROM settings').all();
-  const result = {};
-  for (const row of updated) {
-    result[row.key] = row.value;
+    const { getDb } = require('../models/db');
+    const pool = await getDb();
+
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      for (const [key, value] of Object.entries(settings)) {
+        await connection.execute(
+          'INSERT INTO settings (`key`, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)',
+          [key, String(value)]
+        );
+      }
+      await connection.commit();
+    } catch (txErr) {
+      await connection.rollback();
+      throw txErr;
+    } finally {
+      connection.release();
+    }
+
+    const updated = await query('SELECT `key`, value FROM settings');
+    const result = {};
+    for (const row of updated) {
+      result[row.key] = row.value;
+    }
+    res.json(result);
+  } catch (err) {
+    console.error('updateSettings error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
   }
-  res.json(result);
 }
 
 function backupDatabase(req, res) {
-  const { backupDb } = require('../models/db');
-  try {
-    const path = backupDb();
-    res.json({ message: 'Backup created successfully.', path });
-  } catch (err) {
-    res.status(500).json({ error: 'Backup failed: ' + err.message });
-  }
+  res.json({ message: 'Backup functionality is not available with MySQL. Use your hosting provider backup tools or mysqldump.' });
 }
 
 function restoreDatabase(req, res) {
-  const { backupPath } = req.body;
-  if (!backupPath) return res.status(400).json({ error: 'Backup path is required.' });
-
-  const { restoreDb } = require('../models/db');
-  try {
-    restoreDb(backupPath);
-    res.json({ message: 'Database restored successfully.' });
-  } catch (err) {
-    res.status(500).json({ error: 'Restore failed: ' + err.message });
-  }
+  res.status(400).json({ error: 'Restore functionality is not available with MySQL. Use your hosting provider restore tools or mysql CLI.' });
 }
 
 function listBackups(req, res) {
-  const fs = require('fs');
-  const path = require('path');
-  const backupDir = path.join(__dirname, '..', 'database', 'backups');
-
-  if (!fs.existsSync(backupDir)) {
-    return res.json({ backups: [] });
-  }
-
-  const files = fs.readdirSync(backupDir)
-    .filter(f => f.endsWith('.db'))
-    .map(f => ({
-      name: f,
-      path: path.join(backupDir, f),
-      size: fs.statSync(path.join(backupDir, f)).size,
-      date: fs.statSync(path.join(backupDir, f)).mtime
-    }))
-    .sort((a, b) => b.date - a.date);
-
-  res.json({ backups: files });
+  res.json({ backups: [] });
 }
 
 module.exports = { getSettings, updateSettings, backupDatabase, restoreDatabase, listBackups };

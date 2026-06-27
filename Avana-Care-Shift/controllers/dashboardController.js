@@ -1,179 +1,190 @@
-const { getDb } = require('../models/db');
+const { query, queryOne } = require('../models/db');
 
-function getAdminDashboard(req, res) {
-  const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
-  const now = new Date().toISOString().split(':')[0] + ':00';
+async function getAdminDashboard(req, res) {
+  try {
+    const today = new Date().toISOString().split('T')[0];
 
-  const todayShifts = db.prepare("SELECT COUNT(*) as count FROM shifts WHERE date = ?").get(today);
-  const openShifts = db.prepare("SELECT COUNT(*) as count FROM shifts WHERE status = 'open'").get();
-  const upcomingShifts = db.prepare("SELECT COUNT(*) as count FROM shifts WHERE date >= ? AND status IN ('assigned','open')").get(today);
-  const completedShifts = db.prepare("SELECT COUNT(*) as count FROM shifts WHERE status = 'completed'").get();
-  const cancelledShifts = db.prepare("SELECT COUNT(*) as count FROM shifts WHERE status = 'cancelled'").get();
-  const totalStaff = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'staff' AND status = 'active'").get();
-  const totalClients = db.prepare("SELECT COUNT(*) as count FROM clients").get();
-  const pendingRequests = db.prepare("SELECT COUNT(*) as count FROM shift_requests WHERE status = 'pending'").get();
-  const workingNow = db.prepare("SELECT COUNT(*) as count FROM shifts WHERE status = 'in_progress'").get();
+    const todayShifts = await queryOne("SELECT COUNT(*) as count FROM shifts WHERE date = ?", [today]);
+    const openShifts = await queryOne("SELECT COUNT(*) as count FROM shifts WHERE status = 'open'");
+    const upcomingShifts = await queryOne("SELECT COUNT(*) as count FROM shifts WHERE date >= ? AND status IN ('assigned','open')", [today]);
+    const completedShifts = await queryOne("SELECT COUNT(*) as count FROM shifts WHERE status = 'completed'");
+    const cancelledShifts = await queryOne("SELECT COUNT(*) as count FROM shifts WHERE status = 'cancelled'");
+    const totalStaff = await queryOne("SELECT COUNT(*) as count FROM users WHERE role = 'staff' AND status = 'active'");
+    const totalClients = await queryOne("SELECT COUNT(*) as count FROM clients");
+    const pendingRequests = await queryOne("SELECT COUNT(*) as count FROM shift_requests WHERE status = 'pending'");
+    const workingNow = await queryOne("SELECT COUNT(*) as count FROM shifts WHERE status = 'in_progress'");
 
-  const monthlyIncome = db.prepare(`
-    SELECT COALESCE(SUM(total), 0) as total FROM invoices 
-    WHERE status = 'paid' 
-    AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
-  `).get();
+    const monthlyIncome = await queryOne(`
+      SELECT COALESCE(SUM(total), 0) as total FROM invoices 
+      WHERE status = 'paid' 
+      AND DATE_FORMAT(created_at, '%Y-%m') = DATE_FORMAT(NOW(), '%Y-%m')
+    `);
 
-  const recentShifts = db.prepare(`
-    SELECT s.*, c.name as client_name, u.username as staff_name 
-    FROM shifts s 
-    LEFT JOIN clients c ON s.client_id = c.id 
-    LEFT JOIN users u ON s.staff_id = u.id 
-    ORDER BY s.created_at DESC LIMIT 5
-  `).all();
+    const recentShifts = await query(`
+      SELECT s.*, c.name as client_name, u.username as staff_name 
+      FROM shifts s 
+      LEFT JOIN clients c ON s.client_id = c.id 
+      LEFT JOIN users u ON s.staff_id = u.id 
+      ORDER BY s.created_at DESC LIMIT 5
+    `);
 
-  const recentRequests = db.prepare(`
-    SELECT * FROM shift_requests ORDER BY created_at DESC LIMIT 5
-  `).all();
+    const recentRequests = await query(`
+      SELECT * FROM shift_requests ORDER BY created_at DESC LIMIT 5
+    `);
 
-  const pendingInvoices = db.prepare(`
-    SELECT COUNT(*) as count, COALESCE(SUM(total), 0) as total 
-    FROM invoices WHERE status IN ('pending','overdue')
-  `).get();
+    const pendingInvoices = await queryOne(`
+      SELECT COUNT(*) as count, COALESCE(SUM(total), 0) as total 
+      FROM invoices WHERE status IN ('pending','overdue')
+    `);
 
-  res.json({
-    todayShifts: todayShifts.count,
-    openShifts: openShifts.count,
-    upcomingShifts: upcomingShifts.count,
-    completedShifts: completedShifts.count,
-    cancelledShifts: cancelledShifts.count,
-    totalStaff: totalStaff.count,
-    totalClients: totalClients.count,
-    pendingRequests: pendingRequests.count,
-    workingNow: workingNow.count,
-    monthlyIncome: monthlyIncome.total,
-    pendingInvoices: pendingInvoices.count,
-    pendingInvoiceTotal: pendingInvoices.total,
-    recentShifts,
-    recentRequests
-  });
+    res.json({
+      todayShifts: todayShifts.count,
+      openShifts: openShifts.count,
+      upcomingShifts: upcomingShifts.count,
+      completedShifts: completedShifts.count,
+      cancelledShifts: cancelledShifts.count,
+      totalStaff: totalStaff.count,
+      totalClients: totalClients.count,
+      pendingRequests: pendingRequests.count,
+      workingNow: workingNow.count,
+      monthlyIncome: monthlyIncome.total,
+      pendingInvoices: pendingInvoices.count,
+      pendingInvoiceTotal: pendingInvoices.total,
+      recentShifts,
+      recentRequests
+    });
+  } catch (err) {
+    console.error('getAdminDashboard error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
 }
 
-function getStaffDashboard(req, res) {
-  const db = getDb();
-  const userId = req.user.id;
-  const today = new Date().toISOString().split('T')[0];
+async function getStaffDashboard(req, res) {
+  try {
+    const userId = req.user.id;
+    const today = new Date().toISOString().split('T')[0];
 
-  const todayShift = db.prepare(`
-    SELECT s.*, c.name as client_name, c.address as client_address 
-    FROM shifts s 
-    JOIN clients c ON s.client_id = c.id 
-    WHERE s.staff_id = ? AND s.date = ? 
-    ORDER BY s.start_time LIMIT 1
-  `).get(userId, today);
+    const todayShift = await queryOne(`
+      SELECT s.*, c.name as client_name, c.address as client_address 
+      FROM shifts s 
+      JOIN clients c ON s.client_id = c.id 
+      WHERE s.staff_id = ? AND s.date = ? 
+      ORDER BY s.start_time LIMIT 1
+    `, [userId, today]);
 
-  const upcomingShifts = db.prepare(`
-    SELECT s.*, c.name as client_name 
-    FROM shifts s 
-    JOIN clients c ON s.client_id = c.id 
-    WHERE s.staff_id = ? AND s.date >= ? AND s.status IN ('assigned','in_progress')
-    ORDER BY s.date, s.start_time LIMIT 10
-  `).all(userId, today);
+    const upcomingShifts = await query(`
+      SELECT s.*, c.name as client_name 
+      FROM shifts s 
+      JOIN clients c ON s.client_id = c.id 
+      WHERE s.staff_id = ? AND s.date >= ? AND s.status IN ('assigned','in_progress')
+      ORDER BY s.date, s.start_time LIMIT 10
+    `, [userId, today]);
 
-  const completedShifts = db.prepare(`
-    SELECT COUNT(*) as count FROM shifts 
-    WHERE staff_id = ? AND status = 'completed'
-  `).get(userId);
+    const completedShifts = await queryOne(`
+      SELECT COUNT(*) as count FROM shifts 
+      WHERE staff_id = ? AND status = 'completed'
+    `, [userId]);
 
-  const totalEarnings = db.prepare(`
-    SELECT COALESCE(SUM(s.hours * s.hourly_rate), 0) as total 
-    FROM shifts s WHERE s.staff_id = ? AND s.status = 'completed'
-  `).get(userId);
+    const totalEarnings = await queryOne(`
+      SELECT COALESCE(SUM(s.hours * s.hourly_rate), 0) as total 
+      FROM shifts s WHERE s.staff_id = ? AND s.status = 'completed'
+    `, [userId]);
 
-  const openShifts = db.prepare(`
-    SELECT s.*, c.name as client_name, c.address as client_address 
-    FROM shifts s 
-    JOIN clients c ON s.client_id = c.id 
-    WHERE s.status = 'open' AND s.date >= ?
-    ORDER BY s.date, s.start_time LIMIT 10
-  `).all(today);
+    const openShifts = await query(`
+      SELECT s.*, c.name as client_name, c.address as client_address 
+      FROM shifts s 
+      JOIN clients c ON s.client_id = c.id 
+      WHERE s.status = 'open' AND s.date >= ?
+      ORDER BY s.date, s.start_time LIMIT 10
+    `, [today]);
 
-  const thisMonth = db.prepare(`
-    SELECT COUNT(*) as count, COALESCE(SUM(hours), 0) as total_hours 
-    FROM shifts WHERE staff_id = ? AND status = 'completed' 
-    AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now')
-  `).get(userId);
+    const thisMonth = await queryOne(`
+      SELECT COUNT(*) as count, COALESCE(SUM(hours), 0) as total_hours 
+      FROM shifts WHERE staff_id = ? AND status = 'completed' 
+      AND DATE_FORMAT(date, '%Y-%m') = DATE_FORMAT(NOW(), '%Y-%m')
+    `, [userId]);
 
-  const notifications = db.prepare(`
-    SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 5
-  `).all(userId);
+    const notifications = await query(`
+      SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 5
+    `, [userId]);
 
-  res.json({
-    todayShift,
-    upcomingShifts: upcomingShifts,
-    completedShifts: completedShifts.count,
-    totalEarnings: totalEarnings.total,
-    openShifts,
-    thisMonth: thisMonth.count,
-    thisMonthHours: thisMonth.total_hours,
-    notifications
-  });
+    res.json({
+      todayShift,
+      upcomingShifts,
+      completedShifts: completedShifts.count,
+      totalEarnings: totalEarnings.total,
+      openShifts,
+      thisMonth: thisMonth.count,
+      thisMonthHours: thisMonth.total_hours,
+      notifications
+    });
+  } catch (err) {
+    console.error('getStaffDashboard error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
 }
 
-function getClientDashboard(req, res) {
-  const db = getDb();
-  const userId = req.user.id;
-  const client = db.prepare('SELECT id FROM clients WHERE user_id = ?').get(userId);
-  if (!client) return res.status(404).json({ error: 'Client profile not found.' });
+async function getClientDashboard(req, res) {
+  try {
+    const userId = req.user.id;
+    const client = await queryOne('SELECT id FROM clients WHERE user_id = ?', [userId]);
+    if (!client) return res.status(404).json({ error: 'Client profile not found.' });
 
-  const clientId = client.id;
-  const today = new Date().toISOString().split('T')[0];
+    const clientId = client.id;
+    const today = new Date().toISOString().split('T')[0];
 
-  const upcomingShifts = db.prepare(`
-    SELECT s.*, u.username as staff_name 
-    FROM shifts s 
-    LEFT JOIN users u ON s.staff_id = u.id 
-    WHERE s.client_id = ? AND s.date >= ? AND s.status IN ('assigned','open')
-    ORDER BY s.date, s.start_time
-  `).all(clientId, today);
+    const upcomingShifts = await query(`
+      SELECT s.*, u.username as staff_name 
+      FROM shifts s 
+      LEFT JOIN users u ON s.staff_id = u.id 
+      WHERE s.client_id = ? AND s.date >= ? AND s.status IN ('assigned','open')
+      ORDER BY s.date, s.start_time
+    `, [clientId, today]);
 
-  const completedShifts = db.prepare(`
-    SELECT COUNT(*) as count FROM shifts WHERE client_id = ? AND status = 'completed'
-  `).get(clientId);
+    const completedShifts = await queryOne(`
+      SELECT COUNT(*) as count FROM shifts WHERE client_id = ? AND status = 'completed'
+    `, [clientId]);
 
-  const totalInvoices = db.prepare(`
-    SELECT COUNT(*) as count, COALESCE(SUM(total), 0) as total 
-    FROM invoices WHERE client_id = ?
-  `).get(clientId);
+    const totalInvoices = await queryOne(`
+      SELECT COUNT(*) as count, COALESCE(SUM(total), 0) as total 
+      FROM invoices WHERE client_id = ?
+    `, [clientId]);
 
-  const pendingInvoices = db.prepare(`
-    SELECT COUNT(*) as count, COALESCE(SUM(total), 0) as total 
-    FROM invoices WHERE client_id = ? AND status = 'pending'
-  `).get(clientId);
+    const pendingInvoices = await queryOne(`
+      SELECT COUNT(*) as count, COALESCE(SUM(total), 0) as total 
+      FROM invoices WHERE client_id = ? AND status = 'pending'
+    `, [clientId]);
 
-  const recentRequests = db.prepare(`
-    SELECT * FROM shift_requests WHERE client_id = ? ORDER BY created_at DESC LIMIT 5
-  `).all(clientId);
+    const recentRequests = await query(`
+      SELECT * FROM shift_requests WHERE client_id = ? ORDER BY created_at DESC LIMIT 5
+    `, [clientId]);
 
-  const recentShifts = db.prepare(`
-    SELECT s.*, u.username as staff_name 
-    FROM shifts s 
-    LEFT JOIN users u ON s.staff_id = u.id 
-    WHERE s.client_id = ? ORDER BY s.date DESC LIMIT 5
-  `).all(clientId);
+    const recentShifts = await query(`
+      SELECT s.*, u.username as staff_name 
+      FROM shifts s 
+      LEFT JOIN users u ON s.staff_id = u.id 
+      WHERE s.client_id = ? ORDER BY s.date DESC LIMIT 5
+    `, [clientId]);
 
-  const notifications = db.prepare(`
-    SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 5
-  `).all(userId);
+    const notifications = await query(`
+      SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 5
+    `, [userId]);
 
-  res.json({
-    upcomingShifts,
-    completedShifts: completedShifts.count,
-    totalInvoices: totalInvoices.count,
-    totalBilled: totalInvoices.total,
-    pendingInvoices: pendingInvoices.count,
-    pendingAmount: pendingInvoices.total,
-    recentRequests,
-    recentShifts,
-    notifications
-  });
+    res.json({
+      upcomingShifts,
+      completedShifts: completedShifts.count,
+      totalInvoices: totalInvoices.count,
+      totalBilled: totalInvoices.total,
+      pendingInvoices: pendingInvoices.count,
+      pendingAmount: pendingInvoices.total,
+      recentRequests,
+      recentShifts,
+      notifications
+    });
+  } catch (err) {
+    console.error('getClientDashboard error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
 }
 
 module.exports = { getAdminDashboard, getStaffDashboard, getClientDashboard };
